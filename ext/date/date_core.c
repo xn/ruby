@@ -564,6 +564,20 @@ c_commercial_to_jd(int y, int w, int d, double sg, int *rjd, int *ns)
 }
 
 static void
+c_broadcast_to_jd(int y, int w, int d, double sg, int *rjd, int *ns)
+{
+    int rjd2, ns2;
+
+    c_find_fdoy(y, sg, &rjd2, &ns2);
+    rjd2 += 3;
+    *rjd =
+    (rjd2 - MOD((rjd2 - 1) + 1, 7)) +
+    7 * (w) +
+    (d - 1);
+    *ns = (*rjd < sg) ? 0 : 1;
+}
+
+static void
 c_jd_to_commercial(int jd, double sg, int *ry, int *rw, int *rd)
 {
     int ry2, rm2, rd2, a, rjd2, ns2;
@@ -581,6 +595,26 @@ c_jd_to_commercial(int jd, double sg, int *ry, int *rw, int *rd)
     *rd = MOD(jd + 1, 7);
     if (*rd == 0)
 	*rd = 7;
+}
+
+static void
+c_jd_to_broadcast(int jd, double sg, int *ry, int *rw, int *rd)
+{
+    int ry2, rm2, rd2, a, rjd2, ns2;
+
+    c_jd_to_civil(jd - 3, sg, &ry2, &rm2, &rd2);
+    a = ry2;
+    c_broadcast_to_jd(a + 1, 1, 1, sg, &rjd2, &ns2);
+    if (jd >= rjd2)
+    *ry = a + 1;
+    else {
+    c_broadcast_to_jd(a, 1, 1, sg, &rjd2, &ns2);
+    *ry = a;
+    }
+    *rw = 1 + DIV(jd - rjd2, 7);
+    *rd = MOD(jd + 1, 7);
+    if (*rd == 0)
+    *rd = 7;
 }
 
 static void
@@ -781,6 +815,30 @@ c_valid_commercial_p(int y, int w, int d, double sg,
     c_jd_to_commercial(*rjd, sg, &ry2, rw, rd);
     if (y != ry2 || w != *rw || d != *rd)
 	return 0;
+    return 1;
+}
+
+static int
+c_valid_broadcast_p(int y, int w, int d, double sg,
+             int *rw, int *rd, int *rjd, int *ns)
+{
+    int ns2, ry2, rw2, rd2;
+
+    if (d < 0)
+    d += 8;
+    if (w < 0) {
+    int rjd2;
+
+    c_broadcast_to_jd(y + 1, 1, 1, sg, &rjd2, &ns2);
+    c_jd_to_broadcast(rjd2 + w * 7, sg, &ry2, &rw2, &rd2);
+    if (ry2 != y)
+        return 0;
+    w = rw2;
+    }
+    c_broadcast_to_jd(y, w, d, sg, rjd, ns);
+    c_jd_to_broadcast(*rjd, sg, &ry2, rw, rd);
+    if (y != ry2 || w != *rw || d != *rd)
+    return 0;
     return 1;
 }
 
@@ -1822,6 +1880,16 @@ m_cwyear(union DateData *x)
     return ry;
 }
 
+static int
+m_bwyear(union DateData *x)
+{
+    int ry, rw, rd;
+
+    c_jd_to_broadcast(m_local_jd(x), m_virtual_sg(x), /* !=m_sg() */
+               &ry, &rw, &rd);
+    return ry;
+}
+
 static VALUE
 m_real_cwyear(union DateData *x)
 {
@@ -1840,6 +1908,24 @@ m_real_cwyear(union DateData *x)
     return ry;
 }
 
+static VALUE
+m_real_bwyear(union DateData *x)
+{
+    VALUE nth, ry;
+    int year;
+
+    nth = m_nth(x);
+    year = m_bwyear(x);
+
+    if (f_zero_p(nth))
+    return INT2FIX(year);
+
+    encode_year(nth, year,
+        m_gregorian_p(x) ? -1 : +1,
+        &ry);
+    return ry;
+}
+
 static int
 m_cweek(union DateData *x)
 {
@@ -1851,13 +1937,34 @@ m_cweek(union DateData *x)
 }
 
 static int
+m_bweek(union DateData *x)
+{
+    int ry, rw, rd;
+
+    c_jd_to_broadcast(m_local_jd(x), m_virtual_sg(x), /* !=m_sg() */
+               &ry, &rw, &rd);
+    return rw;
+}
+
+static int
 m_cwday(union DateData *x)
 {
     int w;
 
     w = m_wday(x);
     if (w == 0)
-	w = 7;
+    w = 7;
+    return w;
+}
+
+static int
+m_bwday(union DateData *x)
+{
+    int w;
+
+    w = m_wday(x);
+    if (w == 0)
+    w = 7;
     return w;
 }
 
@@ -2058,27 +2165,53 @@ jd_to_ordinal(VALUE jd, double sg,
 
 static void
 commercial_to_jd(VALUE y, int w, int d, double sg,
-		 VALUE *nth, int *ry,
-		 int *rjd,
-		 int *ns)
+         VALUE *nth, int *ry,
+         int *rjd,
+         int *ns)
 {
     double style = guess_style(y, sg);
 
     if (style == 0) {
-	int jd;
+    int jd;
 
-	c_commercial_to_jd(FIX2INT(y), w, d, sg, &jd, ns);
-	decode_jd(INT2FIX(jd), nth, rjd);
-	if (f_zero_p(*nth))
-	    *ry = FIX2INT(y);
-	else {
-	    VALUE nth2;
-	    decode_year(y, *ns ? -1 : +1, &nth2, ry);
-	}
+    c_commercial_to_jd(FIX2INT(y), w, d, sg, &jd, ns);
+    decode_jd(INT2FIX(jd), nth, rjd);
+    if (f_zero_p(*nth))
+        *ry = FIX2INT(y);
+    else {
+        VALUE nth2;
+        decode_year(y, *ns ? -1 : +1, &nth2, ry);
+    }
     }
     else {
-	decode_year(y, style, nth, ry);
-	c_commercial_to_jd(*ry, w, d, style, rjd, ns);
+    decode_year(y, style, nth, ry);
+    c_commercial_to_jd(*ry, w, d, style, rjd, ns);
+    }
+}
+
+static void
+broadcast_to_jd(VALUE y, int w, int d, double sg,
+         VALUE *nth, int *ry,
+         int *rjd,
+         int *ns)
+{
+    double style = guess_style(y, sg);
+
+    if (style == 0) {
+    int jd;
+
+    c_broadcast_to_jd(FIX2INT(y), w, d, sg, &jd, ns);
+    decode_jd(INT2FIX(jd), nth, rjd);
+    if (f_zero_p(*nth))
+        *ry = FIX2INT(y);
+    else {
+        VALUE nth2;
+        decode_year(y, *ns ? -1 : +1, &nth2, ry);
+    }
+    }
+    else {
+    decode_year(y, style, nth, ry);
+    c_broadcast_to_jd(*ry, w, d, style, rjd, ns);
     }
 }
 
@@ -2089,6 +2222,15 @@ jd_to_commercial(VALUE jd, double sg,
 {
     decode_jd(jd, nth, rjd);
     c_jd_to_commercial(*rjd, sg, ry, rw, rd);
+}
+
+static void
+jd_to_broadcast(VALUE jd, double sg,
+         VALUE *nth, int *rjd,
+         int *ry, int *rw, int *rd)
+{
+    decode_jd(jd, nth, rjd);
+    c_jd_to_broadcast(*rjd, sg, ry, rw, rd);
 }
 
 static void
@@ -2263,6 +2405,36 @@ valid_commercial_p(VALUE y, int w, int d, double sg,
     else {
 	decode_year(y, style, nth, ry);
 	r = c_valid_commercial_p(*ry, w, d, style, rw, rd, rjd, ns);
+    }
+    return r;
+}
+
+static int
+valid_broadcast_p(VALUE y, int w, int d, double sg,
+           VALUE *nth, int *ry,
+           int *rw, int *rd, int *rjd,
+           int *ns)
+{
+    double style = guess_style(y, sg);
+    int r;
+
+    if (style == 0) {
+    int jd;
+
+    r = c_valid_broadcast_p(FIX2INT(y), w, d, sg, rw, rd, &jd, ns);
+    if (!r)
+        return 0;
+    decode_jd(INT2FIX(jd), nth, rjd);
+    if (f_zero_p(*nth))
+        *ry = FIX2INT(y);
+    else {
+        VALUE nth2;
+        decode_year(y, *ns ? -1 : +1, &nth2, ry);
+    }
+    }
+    else {
+    decode_year(y, style, nth, ry);
+    r = c_valid_broadcast_p(*ry, w, d, style, rw, rd, rjd, ns);
     }
     return r;
 }
@@ -2685,6 +2857,36 @@ valid_commercial_sub(int argc, VALUE *argv, VALUE klass, int need_jd)
     }
 }
 
+static VALUE
+valid_broadcast_sub(int argc, VALUE *argv, VALUE klass, int need_jd)
+{
+    VALUE nth, y;
+    int w, d, ry, rw, rd;
+    double sg;
+
+    y = argv[0];
+    w = NUM2INT(argv[1]);
+    d = NUM2INT(argv[2]);
+    sg = NUM2DBL(argv[3]);
+
+    valid_sg(sg);
+
+    {
+    int rjd, ns;
+    VALUE rjd2;
+
+    if (!valid_broadcast_p(y, w, d, sg,
+                &nth, &ry,
+                &rw, &rd, &rjd,
+                &ns))
+        return Qnil;
+    if (!need_jd)
+        return INT2FIX(0); /* dummy */
+    encode_jd(nth, rjd, &rjd2);
+    return rjd2;
+    }
+}
+
 #ifndef NDEBUG
 static VALUE
 date_s__valid_commercial_p(int argc, VALUE *argv, VALUE klass)
@@ -2706,14 +2908,35 @@ date_s__valid_commercial_p(int argc, VALUE *argv, VALUE klass)
 }
 #endif
 
+#ifndef NDEBUG
+static VALUE
+date_s__valid_broadcast_p(int argc, VALUE *argv, VALUE klass)
+{
+    VALUE vy, vw, vd, vsg;
+    VALUE argv2[4];
+
+    rb_scan_args(argc, argv, "31", &vy, &vw, &vd, &vsg);
+
+    argv2[0] = vy;
+    argv2[1] = vw;
+    argv2[2] = vd;
+    if (argc < 4)
+    argv2[3] = DBL2NUM(GREGORIAN);
+    else
+    argv2[3] = vsg;
+
+    return valid_broadcast_sub(4, argv2, klass, 1);
+}
+#endif
+
 /*
  * call-seq:
  *    Date.valid_commercial?(cwyear, cweek, cwday[, start=Date::ITALY])  ->  bool
  *
  * Returns true if the given week date is valid, and false if not.
  *
- *    Date.valid_commercial?(2001,5,6)	#=> true
- *    Date.valid_commercial?(2001,5,8)	#=> false
+ *    Date.valid_commercial?(2001,5,6)  #=> true
+ *    Date.valid_commercial?(2001,5,8)  #=> false
  *
  * See also jd and commercial.
  */
@@ -2729,12 +2952,44 @@ date_s_valid_commercial_p(int argc, VALUE *argv, VALUE klass)
     argv2[1] = vw;
     argv2[2] = vd;
     if (argc < 4)
-	argv2[3] = INT2FIX(DEFAULT_SG);
+    argv2[3] = INT2FIX(DEFAULT_SG);
     else
-	argv2[3] = vsg;
+    argv2[3] = vsg;
 
     if (NIL_P(valid_commercial_sub(4, argv2, klass, 0)))
-	return Qfalse;
+    return Qfalse;
+    return Qtrue;
+}
+
+/*
+ * call-seq:
+ *    Date.valid_broadcast?(bwyear, bweek, bwday[, start=Date::ITALY])  ->  bool
+ *
+ * Returns true if the given week date is valid, and false if not.
+ *
+ *    Date.valid_broadcast?(2001,5,6)  #=> true
+ *    Date.valid_broadcast?(2001,5,8)  #=> false
+ *
+ * See also jd and broadcast.
+ */
+static VALUE
+date_s_valid_broadcast_p(int argc, VALUE *argv, VALUE klass)
+{
+    VALUE vy, vw, vd, vsg;
+    VALUE argv2[4];
+
+    rb_scan_args(argc, argv, "31", &vy, &vw, &vd, &vsg);
+
+    argv2[0] = vy;
+    argv2[1] = vw;
+    argv2[2] = vd;
+    if (argc < 4)
+    argv2[3] = INT2FIX(DEFAULT_SG);
+    else
+    argv2[3] = vsg;
+
+    if (NIL_P(valid_broadcast_sub(4, argv2, klass, 0)))
+    return Qfalse;
     return Qtrue;
 }
 
@@ -3506,6 +3761,68 @@ date_s_commercial(int argc, VALUE *argv, VALUE klass)
     return ret;
 }
 
+/*
+ * call-seq:
+ *    Date.broadcast([bwyear=-4712[, bweek=1[, bwday=1[, start=Date::ITALY]]]])  ->  date
+ *
+ * Creates a date object denoting the given week date.
+ *
+ * The week and the day of week should be a negative or a positive
+ * number (as a relative week/day from the end of year/week when
+ * negative).  They should not be zero.
+ *
+ *    Date.broadcast(2001) #=> #<Date: 2001-01-01 ...>
+ *    Date.broadcast(2002) #=> #<Date: 2001-12-31 ...>
+ *    Date.broadcast(2001,5,6) #=> #<Date: 2001-02-03 ...>
+ *
+ * See also jd and new.
+ */
+static VALUE
+date_s_broadcast(int argc, VALUE *argv, VALUE klass)
+{
+    VALUE vy, vw, vd, vsg, y, fr, fr2, ret;
+    int w, d;
+    double sg;
+
+    rb_scan_args(argc, argv, "04", &vy, &vw, &vd, &vsg);
+
+    y = INT2FIX(-4712);
+    w = 1;
+    d = 1;
+    fr2 = INT2FIX(0);
+    sg = DEFAULT_SG;
+
+    switch (argc) {
+      case 4:
+    val2sg(vsg, sg);
+      case 3:
+    num2int_with_frac(d, positive_inf);
+      case 2:
+    w = NUM2INT(vw);
+      case 1:
+    y = vy;
+    }
+
+    {
+    VALUE nth;
+    int ry, rw, rd, rjd, ns;
+
+    if (!valid_broadcast_p(y, w, d, sg,
+                &nth, &ry,
+                &rw, &rd, &rjd,
+                &ns))
+        rb_raise(rb_eArgError, "invalid date");
+
+    ret = d_simple_new_internal(klass,
+                    nth, rjd,
+                    sg,
+                    0, 0, 0,
+                    HAVE_JD);
+    }
+    add_frac();
+    return ret;
+}
+
 #ifndef NDEBUG
 static VALUE
 date_s_weeknum(int argc, VALUE *argv, VALUE klass)
@@ -3763,14 +4080,23 @@ rt_complete_frags(VALUE klass, VALUE hash)
 						  sym("min"),
 						  sym("sec"))),
 			  rb_ary_new3(2,
-				      sym("commercial"),
-				      rb_ary_new3(6,
-						  sym("cwyear"),
-						  sym("cweek"),
-						  sym("cwday"),
-						  sym("hour"),
-						  sym("min"),
-						  sym("sec"))),
+                      sym("commercial"),
+                      rb_ary_new3(6,
+                          sym("cwyear"),
+                          sym("cweek"),
+                          sym("cwday"),
+                          sym("hour"),
+                          sym("min"),
+                          sym("sec"))),
+              rb_ary_new3(2,
+                      sym("broadcast"),
+                      rb_ary_new3(6,
+                          sym("bwyear"),
+                          sym("bweek"),
+                          sym("bwday"),
+                          sym("hour"),
+                          sym("min"),
+                          sym("sec"))),
 			  rb_ary_new3(2,
 				      sym("wday"),
 				      rb_ary_new3(4,
@@ -3805,6 +4131,15 @@ rt_complete_frags(VALUE klass, VALUE hash)
 						  sym("hour"),
 						  sym("min"),
 						  sym("sec"))),
+              rb_ary_new3(2,
+                      Qnil,
+                      rb_ary_new3(6,
+                          sym("bwyear"),
+                          sym("bweek"),
+                          sym("wday"),
+                          sym("hour"),
+                          sym("min"),
+                          sym("sec"))),
 			  rb_ary_new3(2,
 				      Qnil,
 				      rb_ary_new3(6,
@@ -3814,15 +4149,33 @@ rt_complete_frags(VALUE klass, VALUE hash)
 						  sym("hour"),
 						  sym("min"),
 						  sym("sec"))),
+              rb_ary_new3(2,
+                      Qnil,
+                      rb_ary_new3(6,
+                          sym("year"),
+                          sym("wnum0"),
+                          sym("bwday"),
+                          sym("hour"),
+                          sym("min"),
+                          sym("sec"))),
 			  rb_ary_new3(2,
-				      Qnil,
-				      rb_ary_new3(6,
-						  sym("year"),
-						  sym("wnum1"),
-						  sym("cwday"),
-						  sym("hour"),
-						  sym("min"),
-						  sym("sec"))));
+                      Qnil,
+                      rb_ary_new3(6,
+                          sym("year"),
+                          sym("wnum1"),
+                          sym("cwday"),
+                          sym("hour"),
+                          sym("min"),
+                          sym("sec"))),
+              rb_ary_new3(2,
+                      Qnil,
+                      rb_ary_new3(6,
+                          sym("year"),
+                          sym("wnum1"),
+                          sym("bwday"),
+                          sym("hour"),
+                          sym("min"),
+                          sym("sec"))));
 	rb_gc_register_mark_object(tab);
     }
 
@@ -3903,6 +4256,23 @@ rt_complete_frags(VALUE klass, VALUE hash)
 	    if (NIL_P(ref_hash("cwday")))
 		set_hash("cwday", INT2FIX(1));
 	}
+    else if (k == sym("broadcast")) {
+        long i;
+
+        for (i = 0; i < RARRAY_LEN(a); i++) {
+        VALUE e = RARRAY_AREF(a, i);
+
+        if (!NIL_P(ref_hash0(e)))
+            break;
+        if (NIL_P(d))
+            d = date_s_today(0, (VALUE *)0, cDate);
+        set_hash0(e, rb_funcall(d, SYM2ID(e), 0));
+        }
+        if (NIL_P(ref_hash("bweek")))
+        set_hash("bweek", INT2FIX(1));
+        if (NIL_P(ref_hash("bwday")))
+        set_hash("bwday", INT2FIX(1));
+    }
 	else if (k == sym("wday")) {
 	    if (NIL_P(d))
 		d = date_s_today(0, (VALUE *)0, cDate);
@@ -4019,6 +4389,21 @@ rt__valid_commercial_p(VALUE y, VALUE w, VALUE d, VALUE sg)
 }
 
 static VALUE
+rt__valid_broadcast_p(VALUE y, VALUE w, VALUE d, VALUE sg)
+{
+    VALUE nth, rjd2;
+    int ry, rw, rd, rjd, ns;
+
+    if (!valid_broadcast_p(y, NUM2INT(w), NUM2INT(d), NUM2DBL(sg),
+                &nth, &ry,
+                &rw, &rd, &rjd,
+                &ns))
+    return Qnil;
+    encode_jd(nth, rjd, &rjd2);
+    return rjd2;
+}
+
+static VALUE
 rt__valid_weeknum_p(VALUE y, VALUE w, VALUE d, VALUE f, VALUE sg)
 {
     VALUE nth, rjd2;
@@ -4070,23 +4455,43 @@ rt__valid_date_frags_p(VALUE hash, VALUE sg)
     }
 
     {
-	VALUE year, week, wday;
+    VALUE year, week, wday;
 
-	wday = ref_hash("cwday");
-	if (NIL_P(wday)) {
-	    wday = ref_hash("wday");
-	    if (!NIL_P(wday))
-		if (f_zero_p(wday))
-		    wday = INT2FIX(7);
-	}
+    wday = ref_hash("cwday");
+    if (NIL_P(wday)) {
+        wday = ref_hash("wday");
+        if (!NIL_P(wday))
+        if (f_zero_p(wday))
+            wday = INT2FIX(7);
+    }
 
-	if (!NIL_P(wday) &&
-	    !NIL_P(week = ref_hash("cweek")) &&
-	    !NIL_P(year = ref_hash("cwyear"))) {
-	    VALUE jd = rt__valid_commercial_p(year, week, wday, sg);
-	    if (!NIL_P(jd))
-		return jd;
-	}
+    if (!NIL_P(wday) &&
+        !NIL_P(week = ref_hash("cweek")) &&
+        !NIL_P(year = ref_hash("cwyear"))) {
+        VALUE jd = rt__valid_commercial_p(year, week, wday, sg);
+        if (!NIL_P(jd))
+        return jd;
+    }
+    }
+
+    {
+    VALUE year, week, wday;
+
+    wday = ref_hash("bwday");
+    if (NIL_P(wday)) {
+        wday = ref_hash("wday");
+        if (!NIL_P(wday))
+        if (f_zero_p(wday))
+            wday = INT2FIX(7);
+    }
+
+    if (!NIL_P(wday) &&
+        !NIL_P(week = ref_hash("bweek")) &&
+        !NIL_P(year = ref_hash("bwyear"))) {
+        VALUE jd = rt__valid_broadcast_p(year, week, wday, sg);
+        if (!NIL_P(jd))
+        return jd;
+    }
     }
 
     {
@@ -4110,6 +4515,26 @@ rt__valid_date_frags_p(VALUE hash, VALUE sg)
     }
 
     {
+    VALUE year, week, wday;
+
+    wday = ref_hash("wday");
+    if (NIL_P(wday)) {
+        wday = ref_hash("bwday");
+        if (!NIL_P(wday))
+        if (f_eqeq_p(wday, INT2FIX(7)))
+            wday = INT2FIX(0);
+    }
+
+    if (!NIL_P(wday) &&
+        !NIL_P(week = ref_hash("wnum0")) &&
+        !NIL_P(year = ref_hash("year"))) {
+        VALUE jd = rt__valid_weeknum_p(year, week, wday, INT2FIX(0), sg);
+        if (!NIL_P(jd))
+        return jd;
+    }
+    }
+
+    {
 	VALUE year, week, wday;
 
 	wday = ref_hash("wday");
@@ -4126,6 +4551,25 @@ rt__valid_date_frags_p(VALUE hash, VALUE sg)
 	    if (!NIL_P(jd))
 		return jd;
 	}
+    }
+
+    {
+    VALUE year, week, wday;
+
+    wday = ref_hash("wday");
+    if (NIL_P(wday))
+        wday = ref_hash("bwday");
+    if (!NIL_P(wday))
+        wday = f_mod(f_sub(wday, INT2FIX(1)),
+             INT2FIX(7));
+
+    if (!NIL_P(wday) &&
+        !NIL_P(week = ref_hash("wnum1")) &&
+        !NIL_P(year = ref_hash("year"))) {
+        VALUE jd = rt__valid_weeknum_p(year, week, wday, INT2FIX(1), sg);
+        if (!NIL_P(jd))
+        return jd;
+    }
     }
     return Qnil;
 }
@@ -4976,14 +5420,30 @@ d_lite_day_fraction(VALUE self)
  *
  * Returns the calendar week based year.
  *
- *    Date.new(2001,2,3).cwyear		#=> 2001
- *    Date.new(2000,1,1).cwyear		#=> 1999
+ *    Date.new(2001,2,3).cwyear     #=> 2001
+ *    Date.new(2000,1,1).cwyear     #=> 1999
  */
 static VALUE
 d_lite_cwyear(VALUE self)
 {
     get_d1(self);
     return m_real_cwyear(dat);
+}
+
+/*
+ * call-seq:
+ *    d.bwyear  ->  integer
+ *
+ * Returns the calendar week based year.
+ *
+ *    Date.new(2001,2,3).bwyear     #=> 2001
+ *    Date.new(2000,1,1).bwyear     #=> 1999
+ */
+static VALUE
+d_lite_bwyear(VALUE self)
+{
+    get_d1(self);
+    return m_real_bwyear(dat);
 }
 
 /*
@@ -5003,6 +5463,21 @@ d_lite_cweek(VALUE self)
 
 /*
  * call-seq:
+ *    d.bweek  ->  fixnum
+ *
+ * Returns the calendar week number (1-53).
+ *
+ *    Date.new(2001,2,3).bweek      #=> 5
+ */
+static VALUE
+d_lite_bweek(VALUE self)
+{
+    get_d1(self);
+    return INT2FIX(m_bweek(dat));
+}
+
+/*
+ * call-seq:
  *    d.cwday  ->  fixnum
  *
  * Returns the day of calendar week (1-7, Monday is 1).
@@ -5014,6 +5489,21 @@ d_lite_cwday(VALUE self)
 {
     get_d1(self);
     return INT2FIX(m_cwday(dat));
+}
+
+/*
+ * call-seq:
+ *    d.bwday  ->  fixnum
+ *
+ * Returns the day of calendar week (1-7, Monday is 1).
+ *
+ *    Date.new(2001,2,3).bwday      #=> 6
+ */
+static VALUE
+d_lite_bwday(VALUE self)
+{
+    get_d1(self);
+    return INT2FIX(m_bwday(dat));
 }
 
 #ifndef NDEBUG
@@ -6633,6 +7123,9 @@ static struct tmx_funcs tmx_funcs = {
     (VALUE (*)(void *))m_real_cwyear,
     (int (*)(void *))m_cweek,
     (int (*)(void *))m_cwday,
+    (VALUE (*)(void *))m_real_bwyear,
+    (int (*)(void *))m_bweek,
+    (int (*)(void *))m_bwday,
     (int (*)(void *))m_wnum0,
     (int (*)(void *))m_wnum1,
     (int (*)(void *))m_wday,
@@ -7483,6 +7976,83 @@ datetime_s_commercial(int argc, VALUE *argv, VALUE klass)
 				     0, 0, 0,
 				     rh, rmin, rs,
 				     HAVE_JD | HAVE_TIME);
+    }
+    add_frac();
+    return ret;
+}
+
+/*
+ * call-seq:
+ *    DateTime.broadcast([bwyear=-4712[, bweek=1[, bwday=1[, hour=0[, minute=0[, second=0[, offset=0[, start=Date::ITALY]]]]]]]])  ->  datetime
+ *
+ * Creates a date-time object denoting the given week date.
+ *
+ *    DateTime.broadcast(2001) #=> #<DateTime: 2001-01-01T00:00:00+00:00 ...>
+ *    DateTime.broadcast(2002) #=> #<DateTime: 2001-12-31T00:00:00+00:00 ...>
+ *    DateTime.broadcast(2001,5,6,4,5,6,'+7')
+ *              #=> #<DateTime: 2001-02-03T04:05:06+07:00 ...>
+ */
+static VALUE
+datetime_s_broadcast(int argc, VALUE *argv, VALUE klass)
+{
+    VALUE vy, vw, vd, vh, vmin, vs, vof, vsg, y, fr, fr2, ret;
+    int w, d, h, min, s, rof;
+    double sg;
+
+    rb_scan_args(argc, argv, "08", &vy, &vw, &vd, &vh, &vmin, &vs, &vof, &vsg);
+
+    y = INT2FIX(-4712);
+    w = 1;
+    d = 1;
+
+    h = min = s = 0;
+    fr2 = INT2FIX(0);
+    rof = 0;
+    sg = DEFAULT_SG;
+
+    switch (argc) {
+      case 8:
+    val2sg(vsg, sg);
+      case 7:
+    val2off(vof, rof);
+      case 6:
+    num2int_with_frac(s, positive_inf);
+      case 5:
+    num2int_with_frac(min, 5);
+      case 4:
+    num2int_with_frac(h, 4);
+      case 3:
+    num2int_with_frac(d, 3);
+      case 2:
+    w = NUM2INT(vw);
+      case 1:
+    y = vy;
+    }
+
+    {
+    VALUE nth;
+    int ry, rw, rd, rh, rmin, rs, rjd, rjd2, ns;
+
+    if (!valid_broadcast_p(y, w, d, sg,
+                &nth, &ry,
+                &rw, &rd, &rjd,
+                &ns))
+        rb_raise(rb_eArgError, "invalid date");
+    if (!c_valid_time_p(h, min, s, &rh, &rmin, &rs))
+        rb_raise(rb_eArgError, "invalid date");
+    canon24oc();
+
+    rjd2 = jd_local_to_utc(rjd,
+                   time_to_df(rh, rmin, rs),
+                   rof);
+
+    ret = d_complex_new_internal(klass,
+                     nth, rjd2,
+                     0, INT2FIX(0),
+                     rof, sg,
+                     0, 0, 0,
+                     rh, rmin, rs,
+                     HAVE_JD | HAVE_TIME);
     }
     add_frac();
     return ret;
@@ -8757,6 +9327,26 @@ test_commercial(int from, int to, double sg)
     return 1;
 }
 
+static int
+test_broadcast(int from, int to, double sg)
+{
+    int j;
+
+    fprintf(stderr, "test_broadcast: %d...%d (%d) - %.0f\n",
+        from, to, to - from, sg);
+    for (j = from; j <= to; j++) {
+    int y, w, d, rj, ns;
+
+    c_jd_to_broadcast(j, sg, &y, &w, &d);
+    c_broadcast_to_jd(y, w, d, sg, &rj, &ns);
+    if (j != rj) {
+        fprintf(stderr, "%d != %d\n", j, rj);
+        return 0;
+    }
+    }
+    return 1;
+}
+
 static VALUE
 date_s_test_commercial(VALUE klass)
 {
@@ -8773,6 +9363,26 @@ date_s_test_commercial(VALUE klass)
 	return Qfalse;
     if (!test_commercial(MAX_JD - 366, MAX_JD, ITALY))
 	return Qfalse;
+
+    return Qtrue;
+}
+
+static VALUE
+date_s_test_broadcast(VALUE klass)
+{
+    if (!test_broadcast(MIN_JD, MIN_JD + 366, GREGORIAN))
+    return Qfalse;
+    if (!test_broadcast(2305814, 2598007, GREGORIAN))
+    return Qfalse;
+    if (!test_broadcast(MAX_JD - 366, MAX_JD, GREGORIAN))
+    return Qfalse;
+
+    if (!test_broadcast(MIN_JD, MIN_JD + 366, ITALY))
+    return Qfalse;
+    if (!test_broadcast(2305814, 2598007, ITALY))
+    return Qfalse;
+    if (!test_broadcast(MAX_JD - 366, MAX_JD, ITALY))
+    return Qfalse;
 
     return Qtrue;
 }
@@ -8937,6 +9547,8 @@ date_s_test_all(VALUE klass)
 	return Qfalse;
     if (date_s_test_commercial(klass) == Qfalse)
 	return Qfalse;
+    if (date_s_test_broadcast(klass) == Qfalse)
+    return Qfalse;
     if (date_s_test_weeknum(klass) == Qfalse)
 	return Qfalse;
     if (date_s_test_nth_kday(klass) == Qfalse)
@@ -9062,6 +9674,18 @@ Init_date_core(void)
      *
      * In those classes, this so-called "commercial".
      *
+     * === broadcast week date
+     *
+     * The week date is a date identified by calendar week and day numbers.
+     *
+     * The calendar week is a seven day period within a calendar year,
+     * starting on a Monday and identified by its ordinal number within
+     * the year; the first calendar week of the year is the one that
+     * includes the first Friday of that year. In the Gregorian
+     * calendar, this is equivalent to the week which includes January 4.
+     *
+     * In those classes, this so-called "broadcast".
+     *
      * === julian day number
      *
      * The Julian day number is in elapsed days since noon (Greenwich mean
@@ -9102,7 +9726,7 @@ Init_date_core(void)
      * date.
      *
      * Date object is created with Date::new, Date::jd, Date::ordinal,
-     * Date::commercial, Date::parse, Date::strptime, Date::today,
+     * Date::commercial, Date::broadcast, Date::parse, Date::strptime, Date::today,
      * Time#to_date or etc.
      *
      *     require 'date'
@@ -9114,7 +9738,9 @@ Init_date_core(void)
      *     Date.ordinal(2001,34)
      *	    #=> #<Date: 2001-02-03 ...>
      *     Date.commercial(2001,5,6)
-     *	    #=> #<Date: 2001-02-03 ...>
+     *      #=> #<Date: 2001-02-03 ...>
+     *     Date.broadcast(2001,5,6)
+     *      #=> #<Date: 2001-02-03 ...>
      *     Date.parse('2001-02-03')
      *	    #=> #<Date: 2001-02-03 ...>
      *     Date.strptime('03-02-2001', '%d-%m-%Y')
@@ -9229,7 +9855,9 @@ Init_date_core(void)
     de_define_private_method(CLASS_OF(cDate), "_valid_date?",
 			     date_s__valid_civil_p, -1);
     de_define_private_method(CLASS_OF(cDate), "_valid_commercial?",
-			     date_s__valid_commercial_p, -1);
+                 date_s__valid_commercial_p, -1);
+    de_define_private_method(CLASS_OF(cDate), "_valid_broadcast?",
+                 date_s__valid_broadcast_p, -1);
     de_define_private_method(CLASS_OF(cDate), "_valid_weeknum?",
 			     date_s__valid_weeknum_p, -1);
     de_define_private_method(CLASS_OF(cDate), "_valid_nth_kday?",
@@ -9242,7 +9870,9 @@ Init_date_core(void)
     rb_define_singleton_method(cDate, "valid_civil?", date_s_valid_civil_p, -1);
     rb_define_singleton_method(cDate, "valid_date?", date_s_valid_civil_p, -1);
     rb_define_singleton_method(cDate, "valid_commercial?",
-			       date_s_valid_commercial_p, -1);
+                   date_s_valid_commercial_p, -1);
+    rb_define_singleton_method(cDate, "valid_broadcast?",
+                   date_s_valid_broadcast_p, -1);
 
 #ifndef NDEBUG
     de_define_private_method(CLASS_OF(cDate), "valid_weeknum?",
@@ -9271,6 +9901,7 @@ Init_date_core(void)
     rb_define_singleton_method(cDate, "civil", date_s_civil, -1);
     rb_define_singleton_method(cDate, "new", date_s_civil, -1);
     rb_define_singleton_method(cDate, "commercial", date_s_commercial, -1);
+    rb_define_singleton_method(cDate, "broadcast", date_s_broadcast, -1);
 
 #ifndef NDEBUG
     de_define_singleton_method(cDate, "weeknum", date_s_weeknum, -1);
@@ -9324,6 +9955,10 @@ Init_date_core(void)
     rb_define_method(cDate, "cwyear", d_lite_cwyear, 0);
     rb_define_method(cDate, "cweek", d_lite_cweek, 0);
     rb_define_method(cDate, "cwday", d_lite_cwday, 0);
+
+    rb_define_method(cDate, "bwyear", d_lite_bwyear, 0);
+    rb_define_method(cDate, "bweek", d_lite_bweek, 0);
+    rb_define_method(cDate, "bwday", d_lite_bwday, 0);
 
 #ifndef NDEBUG
     de_define_private_method(cDate, "wnum0", d_lite_wnum0, 0);
@@ -9427,7 +10062,7 @@ Init_date_core(void)
      * any summer time rules.
      *
      * DateTime object is created with DateTime::new, DateTime::jd,
-     * DateTime::ordinal, DateTime::commercial, DateTime::parse,
+     * DateTime::ordinal, DateTime::commercial, DateTime::broadcast, DateTime::parse,
      * DateTime::strptime, DateTime::now, Time#to_datetime or etc.
      *
      *     require 'date'
@@ -9563,7 +10198,9 @@ Init_date_core(void)
     rb_define_singleton_method(cDateTime, "civil", datetime_s_civil, -1);
     rb_define_singleton_method(cDateTime, "new", datetime_s_civil, -1);
     rb_define_singleton_method(cDateTime, "commercial",
-			       datetime_s_commercial, -1);
+                   datetime_s_commercial, -1);
+    rb_define_singleton_method(cDateTime, "broadcast",
+                   datetime_s_broadcast, -1);
 
 #ifndef NDEBUG
     de_define_singleton_method(cDateTime, "weeknum",
@@ -9639,7 +10276,9 @@ Init_date_core(void)
     de_define_singleton_method(cDate, "test_civil", date_s_test_civil, 0);
     de_define_singleton_method(cDate, "test_ordinal", date_s_test_ordinal, 0);
     de_define_singleton_method(cDate, "test_commercial",
-			       date_s_test_commercial, 0);
+                   date_s_test_commercial, 0);
+    de_define_singleton_method(cDate, "test_broadcast",
+                   date_s_test_broadcast, 0);
     de_define_singleton_method(cDate, "test_weeknum", date_s_test_weeknum, 0);
     de_define_singleton_method(cDate, "test_nth_kday", date_s_test_nth_kday, 0);
     de_define_singleton_method(cDate, "test_unit_conv",
